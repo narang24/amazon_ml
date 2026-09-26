@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Entity Resolution Pipeline Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+# Override any value via environment variable: ER_<KEY_UPPER>
+# e.g.  export ER_S3_BUCKET=my-bucket
+
+# Directories (relative to project root)
+data_dir:       data
+processed_dir:  processed
+output_dir:     output
+
+# MLflow tracking
+mlflow_uri:       mlruns            # local; set to S3 URI or MLflow server URL for remote
+experiment_name:  entity_resolution
+
+# Blocking
+lsh_enabled:    true
+lsh_threshold:  0.25               # Jaccard estimate threshold for LSH fuzzy blocking
+
+# Model training
+n_estimators:   500
+early_stopping: 50
+val_frac:       0.20
+seed:           42
+
+# LightGBM hyperparameters (override as needed)
+lgb_params:
+  learning_rate:     0.05
+  num_leaves:        63
+  feature_fraction:  0.8
+  bagging_fraction:  0.8
+  bagging_freq:      5
+  reg_alpha:         0.1
+  reg_lambda:        0.1
+
+# AWS S3 (leave empty to skip S3 sync)
+s3_bucket:  "amazon-ml-data-2026"                     # Set via GitHub Actions secret ER_S3_BUCKET
+s3_prefix:  entity-resolution

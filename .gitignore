@@ -1,0 +1,58 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Environments
+.env
+.venv
+venv/
+env/
+
+# Data & large outputs (stored in S3, not git)
+data/
+processed/
+output/
+mlruns/
+
+# Student resource bundle (raw challenge zip contents)
+6ab10eb3b23ba_student_resource/
+
+# Scratch / temp files
+scratch/
+lookup_*.txt
+preview.txt
+test_hindi.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# AWS
+.aws/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
+__MACOSX/
+
+# Secrets — never commit!
+*.pem
+*.key
+secrets.yaml

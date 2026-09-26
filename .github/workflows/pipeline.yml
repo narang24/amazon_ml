@@ -1,0 +1,197 @@
+name: CI/CD — Entity Resolution Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:          # allow manual trigger from GitHub UI
+
+env:
+  PYTHON_VERSION: "3.11"
+  AWS_REGION: us-east-1
+
+jobs:
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 1: Run tests (always runs, even on PRs)
+  # ────────────────────────────────────────────────────────────────────────────
+  test:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pytest with coverage
+        run: |
+          pytest tests/ -v \
+            --tb=short \
+            --cov=src \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml \
+            -p no:warnings
+
+      - name: Upload coverage report
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: coverage.xml
+          fail_ci_if_error: false
+
+  # ────────────────────────────────────────────────────────────────────────────
+  # Job 2: Deploy to EC2 and run pipeline
+  # Only runs when tests pass AND we are on main branch (merged PR)
+  # ────────────────────────────────────────────────────────────────────────────
+  deploy-and-run:
+    name: Deploy & Run Pipeline on EC2
+    needs: test                    # only deploy if tests pass
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            ${{ env.AWS_REGION }}
+
+      # ── Start EC2 instance (stops after pipeline; saves AWS credits) ──────
+      - name: Start EC2 instance
+        id: start-ec2
+        run: |
+          echo "Starting EC2 instance ${{ secrets.EC2_INSTANCE_ID }} …"
+          aws ec2 start-instances --instance-ids ${{ secrets.EC2_INSTANCE_ID }}
+          aws ec2 wait instance-running --instance-ids ${{ secrets.EC2_INSTANCE_ID }}
+          PUBLIC_IP=$(aws ec2 describe-instances \
+            --instance-ids ${{ secrets.EC2_INSTANCE_ID }} \
+            --query 'Reservations[0].Instances[0].PublicIpAddress' \
+            --output text)
+          echo "public_ip=$PUBLIC_IP" >> $GITHUB_OUTPUT
+          echo "EC2 is running at $PUBLIC_IP"
+
+      # ── Wait for SSH to be available ──────────────────────────────────────
+      - name: Wait for SSH
+        run: |
+          for i in $(seq 1 30); do
+            if ssh -o StrictHostKeyChecking=no \
+                   -o ConnectTimeout=5 \
+                   -i <(echo "${{ secrets.EC2_SSH_KEY }}") \
+                   ${{ secrets.EC2_USER }}@${{ steps.start-ec2.outputs.public_ip }} \
+                   "echo ready" 2>/dev/null; then
+              echo "SSH is ready"; break
+            fi
+            echo "Waiting for SSH ($i/30) …"; sleep 10
+          done
+
+      # ── Sync code to EC2 via rsync ────────────────────────────────────────
+      - name: Sync code to EC2
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2_key
+          chmod 600 /tmp/ec2_key
+          rsync -avz --delete \
+            -e "ssh -o StrictHostKeyChecking=no -i /tmp/ec2_key" \
+            --exclude='.git' \
+            --exclude='data/' \
+            --exclude='processed/' \
+            --exclude='output/' \
+            --exclude='mlruns/' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            . ${{ secrets.EC2_USER }}@${{ steps.start-ec2.outputs.public_ip }}:~/amazon_ml/
+
+      # ── Install dependencies on EC2 ───────────────────────────────────────
+      - name: Install dependencies on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ steps.start-ec2.outputs.public_ip }}
+          username: ${{ secrets.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          timeout:  120s
+          script: |
+            cd ~/amazon_ml
+            python3 -m pip install --quiet --upgrade pip
+            python3 -m pip install --quiet -r requirements.txt
+
+      # ── Run the ML pipeline ───────────────────────────────────────────────
+      - name: Run pipeline on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ steps.start-ec2.outputs.public_ip }}
+          username: ${{ secrets.EC2_USER }}
+          key:      ${{ secrets.EC2_SSH_KEY }}
+          timeout:  7200s            # 2 hours max
+          script: |
+            cd ~/amazon_ml
+            export ER_S3_BUCKET="${{ secrets.S3_BUCKET }}"
+            export AWS_DEFAULT_REGION="${{ env.AWS_REGION }}"
+            python3 src/pipeline.py \
+              --config config/pipeline.yaml \
+              --s3-sync \
+              2>&1 | tee output/pipeline_run.log
+            echo "Pipeline exit code: $?"
+
+      # ── Fetch metrics back to GitHub Actions ─────────────────────────────
+      - name: Fetch metrics from EC2
+        run: |
+          echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2_key
+          chmod 600 /tmp/ec2_key
+          scp -o StrictHostKeyChecking=no -i /tmp/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ steps.start-ec2.outputs.public_ip }}:~/amazon_ml/output/metrics.json \
+            ./metrics.json || echo "metrics.json not found"
+
+      # ── Print metrics as a job summary ───────────────────────────────────
+      - name: Display metrics in GitHub Summary
+        run: |
+          if [ -f metrics.json ]; then
+            echo "## 📊 Pipeline Metrics" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            cat metrics.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+
+            # Extract key metrics for inline display
+            F05=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('f05','N/A'))")
+            PREC=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('precision','N/A'))")
+            REC=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('recall','N/A'))")
+            CAND=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('candidate_recall','N/A'))")
+            RT=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('total_runtime_s','N/A'))")
+
+            echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+            echo "| ------ | ----- |" >> $GITHUB_STEP_SUMMARY
+            echo "| **F0.5** | $F05 |" >> $GITHUB_STEP_SUMMARY
+            echo "| Precision | $PREC |" >> $GITHUB_STEP_SUMMARY
+            echo "| Recall | $REC |" >> $GITHUB_STEP_SUMMARY
+            echo "| Candidate Recall | $CAND |" >> $GITHUB_STEP_SUMMARY
+            echo "| Runtime (s) | $RT |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ metrics.json not found" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # ── Stop EC2 to save costs ────────────────────────────────────────────
+      - name: Stop EC2 instance (save costs)
+        if: always()               # always stop, even if pipeline fails
+        run: |
+          aws ec2 stop-instances --instance-ids ${{ secrets.EC2_INSTANCE_ID }}
+          echo "EC2 instance stopped."
+
+      # ── Upload metrics as artifact ────────────────────────────────────────
+      - name: Upload metrics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-metrics-${{ github.run_number }}
+          path: metrics.json
+          if-no-files-found: warn
