@@ -123,6 +123,7 @@ jobs:
           timeout:  120s
           script: |
             cd ~/amazon_ml
+            source venv/bin/activate
             python3 -m pip install --quiet --upgrade pip
             python3 -m pip install --quiet -r requirements.txt
 
@@ -136,6 +137,7 @@ jobs:
           timeout:  7200s            # 2 hours max
           script: |
             cd ~/amazon_ml
+            source venv/bin/activate
             export ER_S3_BUCKET="${{ secrets.S3_BUCKET }}"
             export AWS_DEFAULT_REGION="${{ env.AWS_REGION }}"
             python3 src/pipeline.py \

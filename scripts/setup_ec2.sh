@@ -11,8 +11,11 @@ sudo apt-get update -y
 sudo apt-get upgrade -y
 
 echo "=== [2/6] Installing Python 3.11 and system tools ==="
-sudo apt-get install -y python3.11 python3.11-venv python3-pip \
-    git rsync awscli htop tmux unzip curl build-essential
+sudo apt-get install -y python3 python3-venv python3-pip \
+    git rsync htop tmux unzip curl build-essential
+
+echo "=== Installing AWS CLI via snap ==="
+sudo snap install aws-cli --classic
 
 echo "=== [3/6] Creating project directory ==="
 mkdir -p ~/amazon_ml/{data/train,data/test,processed,output,config,mlruns}
@@ -20,8 +23,10 @@ mkdir -p ~/amazon_ml/{data/train,data/test,processed,output,config,mlruns}
 echo "=== [4/6] Installing Python dependencies ==="
 cd ~/amazon_ml
 if [ -f requirements.txt ]; then
-    python3.11 -m pip install --upgrade pip
-    python3.11 -m pip install -r requirements.txt
+    python3 -m venv venv
+    source venv/bin/activate
+    python3 -m pip install --upgrade pip
+    python3 -m pip install -r requirements.txt
 else
     echo "[warn] requirements.txt not found — dependencies will be installed on first deploy"
 fi
