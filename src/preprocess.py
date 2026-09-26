@@ -5,7 +5,7 @@ Business Entity Resolution Challenge — preprocessing module
 Dependencies: pandas only (stdlib for everything else) — no external lookups,
 no geocoding, fully compliant with the "no external data" rule.
 
-What it does
+What it does?
 ------------
 1. Loads every *.tsv safely (tab sep, all-string dtype, empty strings kept,
    no quote interpretation — addresses / ID lists contain commas and quotes).
