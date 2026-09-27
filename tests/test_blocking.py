@@ -9,7 +9,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from blocking import exact_block, candidate_recall, generate_candidates
+from blocking import (
+    exact_block, candidate_recall, generate_candidates, write_candidate_pairs,
+)
 from preprocess import preprocess_source
 
 
@@ -106,3 +108,47 @@ class TestGenerateCandidates:
         cands = generate_candidates(s1, s2, s3, lsh_enabled=False)
         dupes = cands.duplicated(["s1_id", "candidate_id"]).sum()
         assert dupes == 0
+class TestWriteCandidatePairs:
+    def test_header_and_grouping(self, tmp_path):
+        cands = pd.DataFrame({
+            "s1_id":        ["S1-001", "S1-001", "S1-002"],
+            "candidate_id": ["S2-001", "S3-001", "S2-002"],
+        })
+        out_path = tmp_path / "candidate_pairs.tsv"
+        write_candidate_pairs(cands, ["S1-001", "S1-002", "S1-003"], out_path)
+
+        df = pd.read_csv(out_path, sep="\t", dtype=str, keep_default_na=False)
+        assert list(df.columns) == ["source1_entity_id", "candidate_entity_ids"]
+        row = df.set_index("source1_entity_id")["candidate_entity_ids"]
+        assert set(row["S1-001"].split(",")) == {"S2-001", "S3-001"}
+        assert row["S1-002"] == "S2-002"
+
+    def test_every_s1_id_present_including_singletons(self, tmp_path):
+        cands = pd.DataFrame({"s1_id": ["S1-001"], "candidate_id": ["S2-001"]})
+        out_path = tmp_path / "candidate_pairs.tsv"
+        all_ids = ["S1-001", "S1-002"]
+        write_candidate_pairs(cands, all_ids, out_path)
+
+        df = pd.read_csv(out_path, sep="\t", dtype=str, keep_default_na=False)
+        assert sorted(df["source1_entity_id"]) == all_ids
+        assert df.set_index("source1_entity_id").loc["S1-002", "candidate_entity_ids"] == ""
+
+    def test_dedupes_within_list(self, tmp_path):
+        cands = pd.DataFrame({
+            "s1_id":        ["S1-001", "S1-001"],
+            "candidate_id": ["S2-001", "S2-001"],
+        })
+        out_path = tmp_path / "candidate_pairs.tsv"
+        write_candidate_pairs(cands, ["S1-001"], out_path)
+
+        df = pd.read_csv(out_path, sep="\t", dtype=str, keep_default_na=False)
+        assert df.iloc[0]["candidate_entity_ids"] == "S2-001"
+
+    def test_empty_candidates_still_writes_all_rows(self, tmp_path):
+        cands = pd.DataFrame(columns=["s1_id", "candidate_id"])
+        out_path = tmp_path / "candidate_pairs.tsv"
+        write_candidate_pairs(cands, ["S1-001", "S1-002"], out_path)
+
+        df = pd.read_csv(out_path, sep="\t", dtype=str, keep_default_na=False)
+        assert len(df) == 2
+        assert (df["candidate_entity_ids"] == "").all()

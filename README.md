@@ -49,8 +49,14 @@ GitHub (code) ──push/merge──► GitHub Actions
 | 2 | `blocking.py` | Generate candidate pairs (exact + LSH) |
 | 3 | `features.py` | Extract 40+ similarity features per pair |
 | 4 | `model.py` | Train LightGBM, sweep threshold for max F0.5 |
-| 5 | `pipeline.py` | Predict on test set → `matching_results.tsv` |
-| 6 | `evaluate.py` | Compute precision, recall, F0.5, candidate recall |
+| 5 | `pipeline.py` | Predict on **test** set → `matching_results.tsv` **and** `candidate_pairs.tsv` (test-set blocking output, same one-row-per-S1-entity format) |
+| 5b | `validate_submission.py` | Validate both output files against the official format rules before they're trusted |
+| 6 | `evaluate.py` | Compute precision, recall, F0.5, candidate recall (validation split) |
+
+`output/candidate_pairs.tsv` is always written from the **test-set** candidates that
+were actually fed to the model at inference time (not the train-set candidates used
+internally to measure `candidate_recall`), so every ID in `matching_results.tsv` is
+guaranteed to appear in it, per the official submission rules.
 
 ---
 
@@ -137,7 +143,19 @@ pip install -r requirements.txt
 python src/pipeline.py --config config/pipeline.yaml
 
 # Run evaluation on existing results
+# NOTE: --gt-path only has ground truth for the TRAIN S1 ids. If output/matching_results.tsv
+# holds TEST-set predictions (the normal end state of a pipeline.py run), this comparison
+# is meaningless (disjoint entity ids) -- it's meant for a run whose predictions cover the
+# train/validation split. The validation-set F0.5/precision/recall that actually matter are
+# already in output/metrics.json (logged during Step 4's threshold sweep).
 python src/evaluate.py --output-dir output --gt-path data/train/train_ground_truth.tsv
+
+# Validate the submission files' format before uploading / zipping (pipeline.py already
+# runs this automatically as Step 5b and records the result in output/metrics.json)
+python src/validate_submission.py \
+    --matching output/matching_results.tsv \
+    --candidate output/candidate_pairs.tsv \
+    --test-dir data/test
 
 # Run tests
 pytest tests/ -v
@@ -168,7 +186,7 @@ amazon_ml/
 ├── data/
 │   ├── train/                 # train_source1/2/3.tsv + ground_truth.tsv
 │   └── test/                  # test_source1/2/3.tsv
-├── output/                    # Generated: matching_results.tsv, candidate_pairs.tsv, metrics.json
+├── output/                    # Generated: matching_results.tsv, candidate_pairs.tsv (both test-set), metrics.json
 ├── processed/                 # Cached preprocessed data
 ├── mlruns/                    # MLflow tracking (synced to S3)
 ├── scripts/
@@ -179,7 +197,8 @@ amazon_ml/
 │   ├── blocking.py            # Step 2: Candidate generation
 │   ├── features.py            # Step 3: Pairwise feature extraction
 │   ├── model.py               # Step 4: LightGBM training + evaluation
-│   ├── pipeline.py            # Orchestrator (steps 1–7)
+│   ├── pipeline.py            # Orchestrator (steps 1–7, incl. submission validation)
+│   ├── validate_submission.py # Vendored official format validator (stdlib only)
 │   └── evaluate.py            # Standalone metrics reporter
 ├── tests/
 │   ├── test_preprocess.py

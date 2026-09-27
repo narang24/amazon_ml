@@ -226,6 +226,33 @@ def generate_candidates(
     return pairs_df
 
 
+def write_candidate_pairs(
+    candidates: pd.DataFrame,
+    all_s1_ids: list[str],
+    out_path: Path,
+) -> None:
+    """Write candidate_pairs.tsv in the required submission format.
+
+    One row per Source-1 entity (matching every id in ``all_s1_ids``, so
+    singletons with no candidates still get a row with an empty list),
+    ``candidate_entity_ids`` comma-joined, sorted, and de-duplicated.
+    This must be the *exact* candidate set handed to the matching model at
+    inference time -- mirrors ``model.write_matching_results`` so the two
+    submission files use the same one-row-per-S1-entity contract.
+    """
+    grouped: dict[str, list[str]] = {}
+    if len(candidates):
+        for s1_id, cand_id in zip(candidates["s1_id"], candidates["candidate_id"]):
+            grouped.setdefault(s1_id, []).append(cand_id)
+    rows = []
+    for s1_id in all_s1_ids:
+        cand_ids = sorted(set(grouped.get(s1_id, [])))
+        rows.append({"source1_entity_id": s1_id,
+                     "candidate_entity_ids": ",".join(cand_ids)})
+    pd.DataFrame(rows).to_csv(out_path, sep="\t", index=False)
+    logger.info("Wrote %d rows to %s", len(rows), out_path)
+
+
 def candidate_recall(
     candidates: pd.DataFrame,
     gt: dict[str, list[str]],

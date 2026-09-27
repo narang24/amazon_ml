@@ -27,6 +27,7 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 import mlflow
 import pandas as pd
@@ -35,12 +36,13 @@ import yaml
 # ── project imports ───────────────────────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 from preprocess import load_split, load_ground_truth, gt_to_pairs
-from blocking import generate_candidates, candidate_recall
+from blocking import generate_candidates, candidate_recall, write_candidate_pairs
 from features import build_feature_matrix
 from model import (
     assign_labels, split_features, run_training_pipeline,
     predict, write_matching_results, macro_f05,
 )
+from validate_submission import validate as validate_submission_output
 
 logging.basicConfig(
     level=logging.INFO,
@@ -192,7 +194,9 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
         mlflow.log_metric("candidate_recall", cand_recall)
 
         # Save candidate pairs
-        candidates_train.to_csv(out_dir / "candidate_pairs.tsv", sep="\t", index=False)
+        # NOTE: the *submission* candidate_pairs.tsv is written from the TEST-set
+        # candidates in Step 5 below (required format: one row per S1 test entity).
+        # Train-set candidates are only used here to measure candidate_recall.
 
         # ─── Step 3: Feature Extraction ──────────────────────────────────
         logger.info("=== Step 3: Feature Extraction ===")
@@ -242,22 +246,62 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
         logger.info("=== Step 5: Test Set Prediction ===")
         test_matches = 0
         test_singletons = 0
+        num_test_candidates = 0
         try:
             s1_te, s2_te, s3_te = load_split(data_dir, "test", proc_dir=proc_dir)
+            all_s1_test = s1_te["entity_id"].tolist()
+
             cands_test = generate_candidates(
                 s1_te, s2_te, s3_te,
                 lsh_enabled=cfg["lsh_enabled"],
                 lsh_threshold=cfg["lsh_threshold"],
             )
+            num_test_candidates = len(cands_test)
+            logger.info("Test blocking: %d candidate pairs for %d S1 entities",
+                        num_test_candidates, len(all_s1_test))
+
+            # candidate_pairs.tsv: exact candidate set fed to the model at
+            # inference time (test set) -- required alongside matching_results.tsv,
+            # one row per S1 test entity, matched IDs are guaranteed a subset of it.
+            write_candidate_pairs(
+                cands_test, all_s1_test, out_dir / "candidate_pairs.tsv")
+
             feat_test = build_feature_matrix(cands_test, s1_te, s2_te, s3_te)
             pred_test = predict(model, feat_test, threshold=threshold)
-            all_s1_test = s1_te["entity_id"].tolist()
             write_matching_results(
                 pred_test, all_s1_test, out_dir / "matching_results.tsv")
             test_matches = sum(len(v) for v in pred_test.values())
             test_singletons = len(all_s1_test) - len([k for k, v in pred_test.items() if v])
         except FileNotFoundError:
             logger.warning("Test data not found — skipping test prediction.")
+
+        # ─── Step 5b: Validate submission format ─────────────────────────
+        logger.info("=== Step 5b: Validating submission format ===")
+        submission_valid: Optional[bool] = None
+        validation_errors: list[str] = []
+        validation_warnings: list[str] = []
+        matching_path = out_dir / "matching_results.tsv"
+        candidate_path = out_dir / "candidate_pairs.tsv"
+        if matching_path.exists():
+            validation_errors, validation_warnings = validate_submission_output(
+                str(matching_path), str(candidate_path),
+                str(data_dir / "test"), check_ids=False,
+            )
+            submission_valid = len(validation_errors) == 0
+            for w in validation_warnings:
+                logger.warning("[validator] %s", w)
+            if submission_valid:
+                logger.info("[validator] PASS \u2014 submission format looks safe to submit.")
+            else:
+                for e in validation_errors:
+                    logger.error("[validator] %s", e)
+                logger.error(
+                    "[validator] FAIL \u2014 %d issue(s); this submission would be "
+                    "rejected without evaluation. See errors above.",
+                    len(validation_errors),
+                )
+        else:
+            logger.warning("[validator] Skipped \u2014 matching_results.tsv was not written.")
 
         # ─── Step 6: Save metrics ─────────────────────────────────────────
         metrics["candidate_recall"] = round(cand_recall, 6)
@@ -269,6 +313,10 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
         metrics["reduction_ratio"] = round(1 - (len(candidates_train) / max(total_possible, 1)), 6)
         metrics["final_matches"] = test_matches
         metrics["singletons"] = test_singletons
+        metrics["num_test_candidate_pairs"] = num_test_candidates
+        metrics["submission_valid"] = submission_valid
+        metrics["validation_errors"] = validation_errors
+        metrics["validation_warnings"] = validation_warnings
         with open(out_dir / "metrics.json", "w") as f:
             json.dump(metrics, f, indent=2)
         mlflow.log_artifact(str(out_dir / "metrics.json"))

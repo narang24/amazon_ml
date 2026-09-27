@@ -217,18 +217,28 @@ jobs:
             MATCHES=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('final_matches','N/A'))")
             SINGLE=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('singletons','N/A'))")
             RT=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('total_runtime_s','N/A'))")
+            TESTPAIRS=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('num_test_candidate_pairs','N/A'))")
+            VALID=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('submission_valid','N/A'))")
 
             echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
             echo "| ------ | ----- |" >> $GITHUB_STEP_SUMMARY
-            echo "| **F0.5** | $F05 |" >> $GITHUB_STEP_SUMMARY
+            echo "| **F0.5** (validation split) | $F05 |" >> $GITHUB_STEP_SUMMARY
             echo "| Precision | $PREC |" >> $GITHUB_STEP_SUMMARY
             echo "| Recall | $REC |" >> $GITHUB_STEP_SUMMARY
-            echo "| Candidate Recall | $CAND |" >> $GITHUB_STEP_SUMMARY
+            echo "| Candidate Recall (train) | $CAND |" >> $GITHUB_STEP_SUMMARY
             echo "| Reduction Ratio | $RR |" >> $GITHUB_STEP_SUMMARY
-            echo "| Candidate Pairs | $PAIRS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Candidate Pairs (train) | $PAIRS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Candidate Pairs (test, submitted) | $TESTPAIRS |" >> $GITHUB_STEP_SUMMARY
             echo "| Final Matches | $MATCHES |" >> $GITHUB_STEP_SUMMARY
             echo "| Singletons (No-Match) | $SINGLE |" >> $GITHUB_STEP_SUMMARY
             echo "| Runtime (s) | $RT |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Submission Valid** | $VALID |" >> $GITHUB_STEP_SUMMARY
+
+            if [ "$VALID" = "False" ]; then
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "### ❌ Submission format errors" >> $GITHUB_STEP_SUMMARY
+              python3 -c "import json; d=json.load(open('metrics.json')); [print(f'- {e}') for e in d.get('validation_errors', [])]" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "⚠️ metrics.json not found" >> $GITHUB_STEP_SUMMARY
           fi
