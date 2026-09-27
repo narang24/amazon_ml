@@ -114,15 +114,29 @@ jobs:
             --exclude='venv/' \
             . ${{ secrets.EC2_USER }}@${{ steps.start-ec2.outputs.public_ip }}:~/amazon_ml/
 
-      # ── Install dependencies on EC2 ───────────────────────────────────────
-      - name: Install dependencies on EC2
+      # ── Create swap space + install dependencies on EC2 ─────────────────
+      - name: Setup swap and install dependencies on EC2
         uses: appleboy/ssh-action@v1.0.3
         with:
           host:     ${{ steps.start-ec2.outputs.public_ip }}
           username: ${{ secrets.EC2_USER }}
           key:      ${{ secrets.EC2_SSH_KEY }}
-          timeout:  120s
+          timeout:  300s
           script: |
+            # Create 8GB swap file if it doesn't already exist
+            if [ ! -f /swapfile ]; then
+              echo "Creating 8GB swap file..."
+              sudo fallocate -l 8G /swapfile
+              sudo chmod 600 /swapfile
+              sudo mkswap /swapfile
+              sudo swapon /swapfile
+              echo "Swap enabled:"
+              free -h
+            else
+              sudo swapon /swapfile 2>/dev/null || true
+              echo "Swap already exists:"
+              free -h
+            fi
             cd ~/amazon_ml
             python3 -m pip install --quiet --upgrade pip --break-system-packages
             python3 -m pip install --quiet -r requirements.txt --break-system-packages
