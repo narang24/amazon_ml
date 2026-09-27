@@ -14,7 +14,7 @@ mlflow_uri:       mlruns            # local; set to S3 URI or MLflow server URL 
 experiment_name:  entity_resolution
 
 # Blocking
-lsh_enabled:    true
+lsh_enabled:    false              # disabled to prevent OOM on 8GB EC2 instance
 lsh_threshold:  0.25               # Jaccard estimate threshold for LSH fuzzy blocking
 
 # Model training
