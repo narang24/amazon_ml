@@ -163,7 +163,7 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
         logger.info("=== Step 1: Preprocessing ===")
         from preprocess import load_split, load_ground_truth
         try:
-            s1_tr, s2_tr, s3_tr = load_split(data_dir, "train")
+            s1_tr, s2_tr, s3_tr = load_split(data_dir, "train", proc_dir=proc_dir)
         except FileNotFoundError as e:
             logger.error("Train data not found: %s", e)
             raise
@@ -243,7 +243,7 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
         test_matches = 0
         test_singletons = 0
         try:
-            s1_te, s2_te, s3_te = load_split(data_dir, "test")
+            s1_te, s2_te, s3_te = load_split(data_dir, "test", proc_dir=proc_dir)
             cands_test = generate_candidates(
                 s1_te, s2_te, s3_te,
                 lsh_enabled=cfg["lsh_enabled"],

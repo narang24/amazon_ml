@@ -43,9 +43,12 @@ from __future__ import annotations
 
 import argparse
 import csv
+import multiprocessing as mp
+import os
 import re
 import unicodedata
 from pathlib import Path
+from typing import Iterable
 
 import pandas as pd
 
@@ -503,27 +506,73 @@ def normalize_country(raw: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # 6. FULL SOURCE PREPROCESSING
 # ─────────────────────────────────────────────────────────────────────────────
-def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
+# ── parallel worker (must be module-level for multiprocessing on Windows) ─────
+def _preprocess_chunk(args: tuple) -> tuple[list, list]:
+    """Process a chunk of rows; returns (name_dicts, addr_dicts)."""
+    names, addresses, countries = args
+    name_results = [normalize_name(str(n)) for n in names]
+    addr_results = [normalize_address(str(a), str(c))
+                    for a, c in zip(addresses, countries)]
+    return name_results, addr_results
+
+
+def preprocess_source(df: pd.DataFrame, n_jobs: int | None = None) -> pd.DataFrame:
+    """Normalise a raw source DataFrame.
+
+    Args:
+        n_jobs: Number of worker processes.  Defaults to all available CPUs.
+                Set to 1 to disable multiprocessing (useful for debugging).
+    """
     df = df.copy()
-    df["source"] = df["entity_id"].str.split("-").str[0]            # S1/S2/S3
+    df["source"]       = df["entity_id"].str.split("-").str[0]
     df["country_norm"] = df["country"].map(lambda x: normalize_country(str(x)))
 
-    name_feats = pd.DataFrame([normalize_name(str(x)) for x in df["business_name"]],
-                              index=df.index)
-    addr_feats = pd.DataFrame(
-        [normalize_address(str(a), str(c)) for a, c in zip(df["business_address"], df["country_norm"])],
-        index=df.index,
-    )
+    n = len(df)
+    if n_jobs is None:
+        n_jobs = max(1, os.cpu_count() or 1)
+
+    if n_jobs == 1 or n < 2000:
+        # Single-process path — avoids fork/pickle overhead for small frames
+        name_feats = pd.DataFrame(
+            [normalize_name(str(x)) for x in df["business_name"]], index=df.index)
+        addr_feats = pd.DataFrame(
+            [normalize_address(str(a), str(c))
+             for a, c in zip(df["business_address"], df["country_norm"])],
+            index=df.index,
+        )
+    else:
+        # Chunk the frame and distribute across worker processes
+        chunk_size = max(500, -(-n // n_jobs))   # ceiling division
+        chunks = [
+            (
+                df["business_name"].iloc[s:s + chunk_size].tolist(),
+                df["business_address"].iloc[s:s + chunk_size].tolist(),
+                df["country_norm"].iloc[s:s + chunk_size].tolist(),
+            )
+            for s in range(0, n, chunk_size)
+        ]
+        with mp.Pool(processes=n_jobs) as pool:
+            results = pool.map(_preprocess_chunk, chunks)
+
+        name_dicts: list[dict] = []
+        addr_dicts: list[dict] = []
+        for nd, ad in results:
+            name_dicts.extend(nd)
+            addr_dicts.extend(ad)
+
+        name_feats = pd.DataFrame(name_dicts, index=df.index)
+        addr_feats = pd.DataFrame(addr_dicts, index=df.index)
+
     out = pd.concat([df, name_feats, addr_feats], axis=1)
 
-    # handy blocking keys (use several in union for recall)
-    out["bk_name_prefix"] = out["name_nospace"].str[:4]
+    # Blocking keys (used in union for recall)
+    out["bk_name_prefix"]     = out["name_nospace"].str[:4]
     out["bk_country_postcode"] = out["country_norm"] + "|" + out["addr_postcode"]
-    out["bk_country_city"] = out["country_norm"] + "|" + out["addr_city_guess"]
-    out["bk_name_translit"] = out["country_norm"] + "|" + out["name_translit"]
-    out["name_missing"] = (out["name_core"] == "").astype(int)
+    out["bk_country_city"]     = out["country_norm"] + "|" + out["addr_city_guess"]
+    out["bk_name_translit"]    = out["country_norm"] + "|" + out["name_translit"]
+    out["name_missing"]        = (out["name_core"] == "").astype(int)
 
-    # Memory optimization: convert all string columns to pyarrow strings
+    # Memory optimisation: use pyarrow-backed strings throughout
     for c in out.columns:
         if out[c].dtype == object or str(out[c].dtype) == "string":
             out[c] = out[c].astype("string[pyarrow]")
@@ -531,12 +580,31 @@ def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def load_split(data_dir: str | Path, split: str = "train"):
+def load_split(data_dir: str | Path, split: str = "train",
+               proc_dir: str | Path | None = None):
+    """Load and preprocess a data split.
+
+    If ``proc_dir`` is given and the processed parquet files already exist
+    there, they are loaded directly — skipping the expensive preprocessing
+    step entirely on re-runs.
+    """
+    import logging
+    log = logging.getLogger(__name__)
     d = Path(data_dir) / split
     frames = []
     for i in (1, 2, 3):
+        name = f"{split}_source{i}"
+        # ── Fast path: use cached parquet if available ──
+        if proc_dir is not None:
+            p = Path(proc_dir) / f"{name}.parquet"
+            if p.exists():
+                log.info("load_split: loading cached %s", p)
+                frames.append(pd.read_parquet(p))
+                continue
+        # ── Slow path: read & preprocess raw TSV ──
+        log.info("load_split: preprocessing %s …", name)
         raw = read_tsv(d / f"{split}_source{i}.tsv")
-        raw = check_source(raw, f"S{i}-", f"{split}_source{i}")
+        raw = check_source(raw, f"S{i}-", name)
         frames.append(preprocess_source(raw))
     return tuple(frames)
 
