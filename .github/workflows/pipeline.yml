@@ -149,6 +149,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key:      ${{ secrets.EC2_SSH_KEY }}
           timeout:  7200s            # 2 hours max
+          command_timeout: 120m      # 2 hours max for the actual script
           script: |
             set -o pipefail
             cd ~/amazon_ml
