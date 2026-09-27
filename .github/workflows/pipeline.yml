@@ -139,6 +139,7 @@ jobs:
             cd ~/amazon_ml
             export ER_S3_BUCKET="${{ secrets.S3_BUCKET }}"
             export AWS_DEFAULT_REGION="${{ env.AWS_REGION }}"
+            export MLFLOW_ALLOW_FILE_STORE=true
             python3 src/pipeline.py \
               --config config/pipeline.yaml \
               --s3-sync \
