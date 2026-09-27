@@ -240,6 +240,8 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
 
         # ─── Step 5: Test set prediction ─────────────────────────────────
         logger.info("=== Step 5: Test Set Prediction ===")
+        test_matches = 0
+        test_singletons = 0
         try:
             s1_te, s2_te, s3_te = load_split(data_dir, "test")
             cands_test = generate_candidates(
@@ -252,6 +254,8 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
             all_s1_test = s1_te["entity_id"].tolist()
             write_matching_results(
                 pred_test, all_s1_test, out_dir / "matching_results.tsv")
+            test_matches = sum(len(v) for v in pred_test.values())
+            test_singletons = len(all_s1_test) - len([k for k, v in pred_test.items() if v])
         except FileNotFoundError:
             logger.warning("Test data not found — skipping test prediction.")
 
@@ -260,6 +264,11 @@ def run_pipeline(cfg: dict, s3_sync: bool = False) -> dict:
         metrics["block_time_s"]     = round(block_time, 2)
         metrics["total_runtime_s"]  = round(time.time() - t_total, 2)
         metrics["run_id"]           = run.info.run_id
+        metrics["num_candidate_pairs"] = len(candidates_train)
+        total_possible = len(s1_tr) * (len(s2_tr) + len(s3_tr))
+        metrics["reduction_ratio"] = round(1 - (len(candidates_train) / max(total_possible, 1)), 6)
+        metrics["final_matches"] = test_matches
+        metrics["singletons"] = test_singletons
         with open(out_dir / "metrics.json", "w") as f:
             json.dump(metrics, f, indent=2)
         mlflow.log_artifact(str(out_dir / "metrics.json"))

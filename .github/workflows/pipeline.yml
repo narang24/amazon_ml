@@ -168,6 +168,10 @@ jobs:
             PREC=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('precision','N/A'))")
             REC=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('recall','N/A'))")
             CAND=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('candidate_recall','N/A'))")
+            RR=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('reduction_ratio','N/A'))")
+            PAIRS=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('num_candidate_pairs','N/A'))")
+            MATCHES=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('final_matches','N/A'))")
+            SINGLE=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('singletons','N/A'))")
             RT=$(python3 -c "import json; d=json.load(open('metrics.json')); print(d.get('total_runtime_s','N/A'))")
 
             echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
@@ -176,6 +180,10 @@ jobs:
             echo "| Precision | $PREC |" >> $GITHUB_STEP_SUMMARY
             echo "| Recall | $REC |" >> $GITHUB_STEP_SUMMARY
             echo "| Candidate Recall | $CAND |" >> $GITHUB_STEP_SUMMARY
+            echo "| Reduction Ratio | $RR |" >> $GITHUB_STEP_SUMMARY
+            echo "| Candidate Pairs | $PAIRS |" >> $GITHUB_STEP_SUMMARY
+            echo "| Final Matches | $MATCHES |" >> $GITHUB_STEP_SUMMARY
+            echo "| Singletons (No-Match) | $SINGLE |" >> $GITHUB_STEP_SUMMARY
             echo "| Runtime (s) | $RT |" >> $GITHUB_STEP_SUMMARY
           else
             echo "⚠️ metrics.json not found" >> $GITHUB_STEP_SUMMARY
