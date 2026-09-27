@@ -60,7 +60,7 @@ def read_tsv(path: str | Path) -> pd.DataFrame:
     df = pd.read_csv(
         path,
         sep="\t",
-        dtype=str,                 # IDs like S1-00001 / PIN codes with leading 0 stay strings
+        dtype="string[pyarrow]",   # memory optimization
         keep_default_na=False,     # "NA", "null", "" stay as literal strings, not NaN
         na_values=[],
         quoting=csv.QUOTE_NONE,    # addresses may contain stray " characters
@@ -69,7 +69,7 @@ def read_tsv(path: str | Path) -> pd.DataFrame:
     )
     df.columns = [c.strip().lstrip("﻿") for c in df.columns]  # BOM / stray spaces
     for c in df.columns:
-        df[c] = df[c].astype(str).str.strip()
+        df[c] = df[c].str.strip()
     if df.shape[1] == 1:
         raise ValueError(f"{path}: only one column — file was not tab-separated?")
     return df
@@ -506,12 +506,12 @@ def normalize_country(raw: str) -> str:
 def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["source"] = df["entity_id"].str.split("-").str[0]            # S1/S2/S3
-    df["country_norm"] = df["country"].map(normalize_country)
+    df["country_norm"] = df["country"].map(lambda x: normalize_country(str(x)))
 
-    name_feats = pd.DataFrame([normalize_name(x) for x in df["business_name"]],
+    name_feats = pd.DataFrame([normalize_name(str(x)) for x in df["business_name"]],
                               index=df.index)
     addr_feats = pd.DataFrame(
-        [normalize_address(a, c) for a, c in zip(df["business_address"], df["country_norm"])],
+        [normalize_address(str(a), str(c)) for a, c in zip(df["business_address"], df["country_norm"])],
         index=df.index,
     )
     out = pd.concat([df, name_feats, addr_feats], axis=1)
@@ -522,6 +522,12 @@ def preprocess_source(df: pd.DataFrame) -> pd.DataFrame:
     out["bk_country_city"] = out["country_norm"] + "|" + out["addr_city_guess"]
     out["bk_name_translit"] = out["country_norm"] + "|" + out["name_translit"]
     out["name_missing"] = (out["name_core"] == "").astype(int)
+
+    # Memory optimization: convert all string columns to pyarrow strings
+    for c in out.columns:
+        if out[c].dtype == object or str(out[c].dtype) == "string":
+            out[c] = out[c].astype("string[pyarrow]")
+
     return out
 
 
