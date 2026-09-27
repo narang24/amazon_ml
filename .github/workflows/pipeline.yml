@@ -136,7 +136,9 @@ jobs:
           key:      ${{ secrets.EC2_SSH_KEY }}
           timeout:  7200s            # 2 hours max
           script: |
+            set -o pipefail
             cd ~/amazon_ml
+            mkdir -p output
             export ER_S3_BUCKET="${{ secrets.S3_BUCKET }}"
             export AWS_DEFAULT_REGION="${{ env.AWS_REGION }}"
             export MLFLOW_ALLOW_FILE_STORE=true
@@ -144,16 +146,31 @@ jobs:
               --config config/pipeline.yaml \
               --s3-sync \
               2>&1 | tee output/pipeline_run.log
-            echo "Pipeline exit code: $?"
+            echo "Pipeline exit code: ${PIPESTATUS[0]}"
 
-      # ── Fetch metrics back to GitHub Actions ─────────────────────────────
-      - name: Fetch metrics from EC2
+      # ── Fetch metrics and logs back to GitHub Actions ──────────────────
+      - name: Fetch metrics and logs from EC2
+        if: always()
         run: |
           echo "${{ secrets.EC2_SSH_KEY }}" > /tmp/ec2_key
           chmod 600 /tmp/ec2_key
           scp -o StrictHostKeyChecking=no -i /tmp/ec2_key \
             ${{ secrets.EC2_USER }}@${{ steps.start-ec2.outputs.public_ip }}:~/amazon_ml/output/metrics.json \
-            ./metrics.json || echo "metrics.json not found"
+            ./metrics.json 2>/dev/null || echo "metrics.json not found"
+          scp -o StrictHostKeyChecking=no -i /tmp/ec2_key \
+            ${{ secrets.EC2_USER }}@${{ steps.start-ec2.outputs.public_ip }}:~/amazon_ml/output/pipeline_run.log \
+            ./pipeline_run.log 2>/dev/null || echo "pipeline_run.log not found"
+
+      # ── Display full pipeline log (for debugging) ──────────────────────
+      - name: Display pipeline log
+        if: always()
+        run: |
+          if [ -f pipeline_run.log ]; then
+            echo "## 📋 Pipeline Log" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -100 pipeline_run.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       # ── Print metrics as a job summary ───────────────────────────────────
       - name: Display metrics in GitHub Summary
